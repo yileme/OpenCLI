@@ -38991,6 +38991,363 @@
     "navigateBefore": false
   },
   {
+    "site": "webcat",
+    "name": "confirm",
+    "description": "Confirm WebCAT segments (or undo confirmation with --undo)",
+    "access": "write",
+    "domain": "webcat-dl.iol8.com",
+    "strategy": "local",
+    "browser": false,
+    "args": [
+      {
+        "name": "ids",
+        "type": "str",
+        "required": false,
+        "help": "Comma-separated sentIds to confirm"
+      },
+      {
+        "name": "filter",
+        "type": "str",
+        "required": false,
+        "help": "Instead of --ids: confirm every segment matching untranslated|translated|unconfirmed|confirmed|locked|unlocked"
+      },
+      {
+        "name": "undo",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Set isConfirm=false instead of true"
+      },
+      {
+        "name": "dry-run",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Show what would be confirmed without writing"
+      }
+    ],
+    "columns": [
+      "docId",
+      "isConfirm",
+      "count",
+      "sentIds"
+    ],
+    "type": "js",
+    "modulePath": "webcat/confirm.js",
+    "sourceFile": "webcat/confirm.js"
+  },
+  {
+    "site": "webcat",
+    "name": "count",
+    "description": "Show raw WebCAT sentence counters (total, filtered total, ...) for the open document",
+    "access": "read",
+    "domain": "webcat-dl.iol8.com",
+    "strategy": "local",
+    "browser": false,
+    "args": [],
+    "type": "js",
+    "modulePath": "webcat/count.js",
+    "sourceFile": "webcat/count.js"
+  },
+  {
+    "site": "webcat",
+    "name": "fill",
+    "description": "Write translations into the open WebCAT document (batch save target)",
+    "access": "write",
+    "domain": "webcat-dl.iol8.com",
+    "strategy": "local",
+    "browser": false,
+    "args": [
+      {
+        "name": "file",
+        "type": "str",
+        "required": false,
+        "help": "JSON / JSONL / {sentId: text} file with the translations to write"
+      },
+      {
+        "name": "sent-id",
+        "type": "str",
+        "required": false,
+        "help": "Single segment sentId (use together with --text)"
+      },
+      {
+        "name": "text",
+        "type": "str",
+        "required": false,
+        "help": "Plain-text translation for --sent-id"
+      },
+      {
+        "name": "chunk",
+        "type": "int",
+        "default": 50,
+        "required": false,
+        "help": "Segments per batch-save-target request"
+      },
+      {
+        "name": "keep-locked",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Also write segments the task has locked (default: skip them)"
+      },
+      {
+        "name": "snapshot",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Ask WebCAT to store a snapshot before writing"
+      },
+      {
+        "name": "verify",
+        "type": "bool",
+        "default": true,
+        "required": false,
+        "help": "Re-read the written segments and report mismatches"
+      },
+      {
+        "name": "dry-run",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Validate the payload and stop before writing"
+      }
+    ],
+    "columns": [
+      "docId",
+      "requested",
+      "updated",
+      "skipped_locked",
+      "verified",
+      "mismatch_count"
+    ],
+    "type": "js",
+    "modulePath": "webcat/fill.js",
+    "sourceFile": "webcat/fill.js"
+  },
+  {
+    "site": "webcat",
+    "name": "login",
+    "description": "Launch/harvest a Chrome session for the WebCAT (云译客) editor and save the CLI session",
+    "access": "write",
+    "domain": "webcat-dl.iol8.com",
+    "strategy": "local",
+    "browser": false,
+    "args": [
+      {
+        "name": "url",
+        "type": "str",
+        "required": false,
+        "positional": true,
+        "help": "WebCAT editor URL to open (must contain ?ck=...); defaults to the WebCAT home page"
+      },
+      {
+        "name": "cdp",
+        "type": "str",
+        "required": false,
+        "help": "Reuse a running Chrome DevTools endpoint, e.g. http://127.0.0.1:9222"
+      },
+      {
+        "name": "chrome",
+        "type": "str",
+        "required": false,
+        "help": "Path to the Chrome/Chromium binary used for the login window"
+      },
+      {
+        "name": "profile",
+        "type": "str",
+        "required": false,
+        "help": "Chrome profile directory for the login window (default: /Users/lingsongxiong/.opencli/webcat-chrome-profile)"
+      },
+      {
+        "name": "timeout",
+        "type": "int",
+        "default": 300,
+        "required": false,
+        "help": "Maximum seconds to wait for sign-in plus an open task document"
+      },
+      {
+        "name": "close",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Close the Chrome window once the session is captured"
+      }
+    ],
+    "columns": [
+      "status",
+      "ck",
+      "cookies",
+      "docId",
+      "taskId",
+      "session_file"
+    ],
+    "type": "js",
+    "modulePath": "webcat/login.js",
+    "sourceFile": "webcat/login.js"
+  },
+  {
+    "site": "webcat",
+    "name": "open",
+    "description": "Point the WebCAT session at a task document URL (updates ck/splitIndex kept in ~/.opencli/webcat.json)",
+    "access": "write",
+    "domain": "webcat-dl.iol8.com",
+    "strategy": "local",
+    "browser": false,
+    "args": [
+      {
+        "name": "url",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "WebCAT editor URL, e.g. https://webcat-dl.iol8.com/?ck=...&splitIndex=0#/project"
+      },
+      {
+        "name": "cookie",
+        "type": "str",
+        "required": false,
+        "help": "Cookie header to store with the session, e.g. \"ck=...; CASID=...\" (usually unnecessary after webcat login)"
+      }
+    ],
+    "columns": [
+      "status",
+      "ck",
+      "docId",
+      "taskId",
+      "session_file"
+    ],
+    "type": "js",
+    "modulePath": "webcat/open.js",
+    "sourceFile": "webcat/open.js"
+  },
+  {
+    "site": "webcat",
+    "name": "sentences",
+    "description": "Read WebCAT segments (source, target, status, inline tags) for the open document",
+    "access": "read",
+    "domain": "webcat-dl.iol8.com",
+    "strategy": "local",
+    "browser": false,
+    "args": [
+      {
+        "name": "filter",
+        "type": "str",
+        "default": "all",
+        "required": false,
+        "help": "all | untranslated | translated | unconfirmed | confirmed | locked | unlocked"
+      },
+      {
+        "name": "limit",
+        "type": "int",
+        "required": false,
+        "help": "Stop after this many segments (default: whole document)"
+      },
+      {
+        "name": "page-size",
+        "type": "int",
+        "default": 200,
+        "required": false,
+        "help": "Segments per API page (1-500)"
+      },
+      {
+        "name": "ids",
+        "type": "str",
+        "required": false,
+        "help": "Only these sentIds, comma separated"
+      },
+      {
+        "name": "out",
+        "type": "str",
+        "required": false,
+        "help": "Also write the segments as JSON Lines to this file"
+      },
+      {
+        "name": "strip-html",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Drop sourceHtml/targetHtml to keep the payload small"
+      }
+    ],
+    "columns": [
+      "sentId",
+      "index",
+      "status",
+      "locked",
+      "source",
+      "target"
+    ],
+    "type": "js",
+    "modulePath": "webcat/sentences.js",
+    "sourceFile": "webcat/sentences.js"
+  },
+  {
+    "site": "webcat",
+    "name": "status",
+    "description": "Show the current WebCAT (云译客) task, language pair, and translation progress",
+    "access": "read",
+    "domain": "webcat-dl.iol8.com",
+    "strategy": "local",
+    "browser": false,
+    "args": [
+      {
+        "name": "skip-counts",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Skip the sentence-count request (fewer API calls)"
+      }
+    ],
+    "columns": [
+      "docId",
+      "taskId",
+      "docName",
+      "sourceLangId",
+      "targetLangId",
+      "taskStatus",
+      "total",
+      "filterTotal",
+      "session_age_seconds"
+    ],
+    "defaultFormat": "plain",
+    "type": "js",
+    "modulePath": "webcat/status.js",
+    "sourceFile": "webcat/status.js"
+  },
+  {
+    "site": "webcat",
+    "name": "submit",
+    "description": "Finish/submit the open WebCAT task (requires --yes)",
+    "access": "write",
+    "domain": "webcat-dl.iol8.com",
+    "strategy": "local",
+    "browser": false,
+    "args": [
+      {
+        "name": "yes",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Actually submit — without it this is a preview only"
+      },
+      {
+        "name": "status",
+        "type": "int",
+        "default": 3,
+        "required": false,
+        "help": "Task status to send (WebCAT UI submits 3)"
+      }
+    ],
+    "columns": [
+      "taskId",
+      "docId",
+      "status",
+      "submitted"
+    ],
+    "type": "js",
+    "modulePath": "webcat/submit.js",
+    "sourceFile": "webcat/submit.js"
+  },
+  {
     "site": "wechat-channels",
     "name": "login",
     "description": "Open wechat-channels login and wait until the browser session is authenticated",
