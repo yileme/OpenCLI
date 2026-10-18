@@ -39126,6 +39126,62 @@
   },
   {
     "site": "webcat",
+    "name": "import",
+    "description": "Backfill the open WebCAT task from a Wordfast TXLF export (aligned, inline tags preserved)",
+    "access": "write",
+    "domain": "webcat-dl.iol8.com",
+    "strategy": "local",
+    "browser": false,
+    "args": [
+      {
+        "name": "file",
+        "type": "str",
+        "required": true,
+        "help": "Path to the .txlf export from Wordfast Pro"
+      },
+      {
+        "name": "dry-run",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Show the alignment report without writing"
+      },
+      {
+        "name": "chunk",
+        "type": "int",
+        "default": 40,
+        "required": false,
+        "help": "Segments per batch-save-target request"
+      },
+      {
+        "name": "overwrite",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Also rewrite segments whose current target already equals the TXLF translation"
+      },
+      {
+        "name": "out",
+        "type": "str",
+        "required": false,
+        "help": "Write the aligned fill payload (JSONL) to this file"
+      }
+    ],
+    "columns": [
+      "docId",
+      "txlf_segments",
+      "filled",
+      "identical_skipped",
+      "locked_skipped",
+      "no_match",
+      "tag_mismatches"
+    ],
+    "type": "js",
+    "modulePath": "webcat/import.js",
+    "sourceFile": "webcat/import.js"
+  },
+  {
+    "site": "webcat",
     "name": "login",
     "description": "Launch/harvest a Chrome session for the WebCAT (云译客) editor and save the CLI session",
     "access": "write",
@@ -39301,8 +39357,8 @@
       "docId",
       "taskId",
       "docName",
-      "sourceLangId",
-      "targetLangId",
+      "sourceLang",
+      "targetLang",
       "taskStatus",
       "total",
       "filterTotal",

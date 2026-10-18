@@ -28,23 +28,47 @@ const ID_CHUNK = 100;
 
 export function normalizeForCompare(text) {
   return String(text ?? '')
+    .replace(/&#x([0-9a-f]+);/gi, (_m, hex) => codePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_m, dec) => codePoint(parseInt(dec, 10)))
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&')
     .replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
+function codePoint(code) {
+  if (!Number.isFinite(code) || code < 0 || code > 0x10ffff) return '';
+  try {
+    return String.fromCodePoint(code);
+  } catch {
+    return '';
+  }
+}
+
 export async function fetchSegmentsByIds(session, docId, ids, fetchImpl = fetch) {
   const map = new Map();
+  const wanted = new Set(ids.map(String));
   for (let index = 0; index < ids.length; index += ID_CHUNK) {
     const chunk = ids.slice(index, index + ID_CHUNK);
-    const page = await flowGetSentence(session, {
-      docId,
-      sentIds: chunk.join(','),
-      splitIndex: session.splitIndex || '0',
-    }, fetchImpl);
-    for (const dto of page.list) {
-      const sentId = String(dto?.sentId ?? '');
-      if (sentId) map.set(sentId, dto);
+    // The server caps how many ids `sentIds` honors per call; request fewer per
+    // call and also ask for a page size that can hold the whole chunk.
+    for (let sub = 0; sub < chunk.length; sub += 25) {
+      const subChunk = chunk.slice(sub, sub + 25);
+      const page = await flowGetSentence(session, {
+        docId,
+        sentIds: subChunk.join(','),
+        pageSize: subChunk.length,
+        splitIndex: session.splitIndex || '0',
+      }, fetchImpl);
+      for (const dto of page.list) {
+        const sentId = String(dto?.sentId ?? '');
+        if (sentId && wanted.has(sentId)) map.set(sentId, dto);
+      }
     }
   }
   return map;
@@ -164,7 +188,7 @@ export const command = cli({
           mismatches.push({ sentId: item.sentId, expected: expected.get(item.sentId), actual: null, reason: 'segment missing after write' });
           continue;
         }
-        const actual = normalizeForCompare(dto.targetText ?? htmlToPlain(dto.targetPlaceholder));
+        const actual = normalizeForCompare(htmlToPlain(dto.targetPlaceholder ?? dto.targetText));
         if (actual === expected.get(item.sentId)) verified += 1;
         else mismatches.push({ sentId: item.sentId, expected: expected.get(item.sentId), actual });
       }

@@ -47,6 +47,34 @@ WebCAT logs you out; rerun `login`, or `open` with `--cookie "ck=...; CASID=..."
 | `webcat fill` | write | Write translations (batch) |
 | `webcat confirm` | write | Confirm / un-confirm segments |
 | `webcat submit` | write | Finish the task (needs `--yes`) |
+| `webcat import` | write | Backfill from a Wordfast TXLF export (aligned, tags auto-injected) |
+
+## Importing from Wordfast (TXLF backfill)
+
+Already translated the same file in Wordfast Pro? Push those translations into
+the WebCAT task instead of re-translating:
+
+```sh
+opencli webcat import --file job.docx.txlf --dry-run   # alignment report only
+opencli webcat import --file job.docx.txlf             # write tag-correct targets
+```
+
+What it does (and refuses to do):
+
+- Five alignment passes: exact match → table-row cell → consecutive merge →
+  `其中：/例如：` prefix cell → row tail. Unmatchable segments land on the
+  `no_match` review list instead of being guessed.
+- Inline tags are rebuilt for WebCAT: TXLF `bx/ex`/`bpt/ept` wrappers map onto
+  WebCAT `rs/re` `<img>` pairs (LIFO nesting, payloads dropped), soft line
+  breaks become newlines. A write is refused if any segment's target tag set
+  does not equal its source tag set (`tag_mismatches` gate).
+- Locked segments are never touched; segments whose current target already
+  equals the TXLF translation are skipped (`--overwrite` to redo).
+- Empty aligned targets are never written — a mis-split table cell goes to the
+  review list with `reason: empty target cell`.
+- Report fields: `matched_by_pass`, `filled`, `identical_skipped`,
+  `locked_skipped`, `no_match_segments`, `tag_mismatches`, then `verified` /
+  `mismatch_count` after writing.
 
 ## Agent translation loop
 
@@ -97,6 +125,8 @@ Safety rails:
 - `webcat fill --chunk 50` — segments per request (editor itself batches ~50)
 - `webcat fill --snapshot` — ask WebCAT to snapshot before writing
 - `webcat status --skip-counts` — fewer API calls
+- `webcat status` also resolves language names (`简体中文 (Simplified Chinese)`)
+  via `/mt/info/getLanguageList`, so a wrong-direction task is visible at a glance
 - `-f table|json|plain|md|csv|yaml` — output format on every command (JSON is default; `ok`/`data` envelope)
 
 ## Troubleshooting

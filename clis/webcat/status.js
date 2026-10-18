@@ -8,8 +8,32 @@ import {
   getTaskDetail,
   getWebcatSessionFile,
   loadSession,
+  payloadOf,
   sumSentenceCount,
+  webcatFetch,
 } from './_api.js';
+
+async function getLanguageNames(session) {
+  // Map languageId -> display name ("英语 (English)"). Best-effort: failures
+  // degrade to bare ids instead of failing the whole status command.
+  try {
+    const envelope = await webcatFetch('/mt/info/getLanguageList', { session, method: 'POST', data: {} });
+    const payload = payloadOf(envelope);
+    const list = Array.isArray(payload) ? payload : payload?.list;
+    const map = new Map();
+    if (Array.isArray(list)) {
+      for (const lang of list) {
+        if (lang?.languageId === undefined) continue;
+        const name = String(lang.languageName ?? '').trim();
+        const en = String(lang.en ?? '').trim();
+        map.set(String(lang.languageId), name && en ? `${name} (${en})` : name || en);
+      }
+    }
+    return map;
+  } catch {
+    return new Map();
+  }
+}
 
 function sessionAgeSeconds(session) {
   const savedAt = Date.parse(session.savedAt ?? '');
@@ -29,10 +53,11 @@ export const command = cli({
   args: [
     { name: 'skip-counts', type: 'bool', default: false, help: 'Skip the sentence-count request (fewer API calls)' },
   ],
-  columns: ['docId', 'taskId', 'docName', 'sourceLangId', 'targetLangId', 'taskStatus', 'total', 'filterTotal', 'session_age_seconds'],
+  columns: ['docId', 'taskId', 'docName', 'sourceLang', 'targetLang', 'taskStatus', 'total', 'filterTotal', 'session_age_seconds'],
   func: async (kwargs) => {
     const session = loadSession();
     const detail = await getTaskDetail(session);
+    const languageNames = await getLanguageNames(session);
     let counts = {};
     if (kwargs['skip-counts'] !== true) {
       try {
@@ -48,6 +73,8 @@ export const command = cli({
       projectName: detail.projectName ?? detail.groupName ?? '',
       sourceLangId: detail.sourceLangId ?? '',
       targetLangId: detail.targetLangId ?? '',
+      sourceLang: languageNames.get(String(detail.sourceLangId)) ?? '',
+      targetLang: languageNames.get(String(detail.targetLangId)) ?? '',
       taskStatus: detail.taskStatus ?? '',
       taskClassify: detail.taskClassify ?? '',
       taskType: detail.taskType ?? '',

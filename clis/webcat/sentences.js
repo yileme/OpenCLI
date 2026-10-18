@@ -98,11 +98,28 @@ function readTranslationsFile(file) {
   const text = fs.readFileSync(resolved, 'utf-8').trim();
   if (!text) throw new ArgumentError(`Translation file is empty: ${resolved}`);
   let parsed;
-  if (text.startsWith('[') || text.startsWith('{')) {
+  const firstNonWs = text.slice(0, 200).replace(/^\s+/, '');
+  if (firstNonWs.startsWith('[')) {
     try {
       parsed = JSON.parse(text);
     } catch (error) {
       throw new ArgumentError(`Translation file is not valid JSON: ${resolved}`, String(error));
+    }
+  } else if (firstNonWs.startsWith('{')) {
+    // Could be one JSON object or JSON Lines (one object per line). Try whole
+    // file first; on failure fall back to per-line parsing.
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = [];
+      const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+      for (let i = 0; i < lines.length; i++) {
+        try {
+          parsed.push(JSON.parse(lines[i]));
+        } catch (error) {
+          throw new ArgumentError(`Translation file line ${i + 1} is not valid JSON`, String(error));
+        }
+      }
     }
   } else {
     parsed = text
