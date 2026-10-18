@@ -113,27 +113,96 @@ export function extractTermPairs(segments, { minCount = 2, minLen = 2, maxLen = 
 /* -------------------------------------------------------------- termbase */
 
 /** entry/create accepts termDTOList — shape from bundle: {termName, termTranslation, languagePairId?}. */
-export async function createEntries(session, termDTOList, fetchImpl = fetch) {
+export async function createEntries(session, termDTOList, { groupId, libraryId, libType = 1, docId, sentId, isAudit = 0, comment = '', repeatReplaceMode } = {}, fetchImpl = fetch) {
   if (termDTOList.length === 0) return { created: 0 };
-  const envelope = await webcatFetch('/termbase/entry/create', {
-    session,
-    fetchImpl,
-    json: true,
-    data: { termDTOList },
-  });
-  return { created: termDTOList.length, envelope: payloadOf(envelope) ?? null };
+  if (groupId == null || libraryId == null) {
+    throw new ArgumentError('createEntries needs groupId and libraryId (resolve via getTaskDetail)');
+  }
+  const results = [];
+  for (const t of termDTOList) {
+  // The editor posts one flat object per term (groupId/libraryId/libType/
+  // source/target/...); termDTOList is the batch form accepted by the same
+  // endpoint. Mirror the editor's flat shape when the caller gives us one.
+  const data = {
+    groupId,
+    libraryId,
+    libType,
+    source: termDTOList[0].termName,
+    target: termDTOList[0].termTranslation,
+    comment,
+    isAudit,
+    ...(docId ? { docId } : {}),
+    ...(sentId ? { sentId } : {}),
+    ...(repeatReplaceMode ? { repeatReplaceMode } : {}),
+  };
+  // NOTE: this endpoint rejects JSON bodies (all fields arrive null) but
+  // accepts form-encoded — same quirk as most WebCAT actions.
+    let envelope;
+    try {
+      envelope = await webcatFetch('/termbase/entry/create', {
+        session,
+        fetchImpl,
+        data: {
+          groupId,
+          libraryId,
+          libType,
+          source: t.termName,
+          target: t.termTranslation,
+          comment,
+          isAudit,
+          ...(docId ? { docId } : {}),
+          ...(sentId ? { sentId } : {}),
+          ...(repeatReplaceMode ? { repeatReplaceMode } : {}),
+        },
+      });
+    } catch (error) {
+      const dup = /420014|术语已存在/.test(String(error?.message ?? error));
+      if (!dup) throw error;
+      results.push({ source: t.termName, target: t.termTranslation, skipped: 'duplicate' });
+      continue;
+    }
+    results.push({ source: t.termName, target: t.termTranslation, entryId: payloadOf(envelope) ?? null });
+  }
+  const created = results.filter((r) => !r.skipped).length;
+  const skipped = results.length - created;
+  return { created, skipped, entries: results };
 }
 
-export async function listEntries(session, { pageSize = 100, pageIndex = 1 } = {}, fetchImpl = fetch) {
+export async function listEntries(session, { pageSize = 100, pageNum = 1, sourceText = '', libraryId } = {}, fetchImpl = fetch) {
+  // `sourceText` is required by this endpoint (it doubles as the term search
+  // box in the editor UI); an empty string matches nothing, so listing all
+  // entries needs one cheap probe per common single character.
   const envelope = await webcatFetch('/termbase/entry/listPageEntryList', {
     session,
     method: 'GET',
-    query: { pageSize, pageIndex },
+    query: { libraryId: libraryId ?? await resolveTermLibraryId(session, fetchImpl), pageNum, pageSize, sourceText },
     fetchImpl,
   });
   const payload = payloadOf(envelope);
   const list = Array.isArray(payload) ? payload : payload?.list ?? payload?.data ?? [];
   return { list, total: payload?.total ?? list.length };
+}
+
+
+async function resolveTermLibraryId(session, fetchImpl = fetch) {
+  const detail = await getTaskDetail(session, fetchImpl);
+  const lib = Array.isArray(detail?.termLibrary) ? detail.termLibrary.find((l) => l?.libraryId) : null;
+  return lib?.libraryId ?? null;
+}
+
+async function listAllEntries(session, fetchImpl = fetch) {
+  const libraryId = await resolveTermLibraryId(session, fetchImpl);
+  const seen = new Map();
+  const probes = ['药', '医', '监', '管', '产', '品', '注', '册', '临', '床', '械', '审', '批', '安', '有', '效'];
+  for (const ch of probes) {
+    const { list } = await listEntries(session, { pageSize: 500, pageNum: 1, sourceText: ch, libraryId }, fetchImpl);
+    for (const e of list) {
+      const id = e.id ?? e.entryId ?? `${e.source ?? e.termName}/${e.target ?? e.termTranslation}`;
+      if (!seen.has(id)) seen.set(id, e);
+    }
+    if (seen.size >= 500) break;
+  }
+  return [...seen.values()];
 }
 
 /* ------------------------------------------------------------- checking */
@@ -192,15 +261,34 @@ export const command = cli({
     const docId = detail.docId;
 
     if (kwargs.action === 'list') {
-      const { list, total } = await listEntries(session, {
-        pageSize: Number(kwargs['page-size'] ?? 100),
-        pageIndex: Number(kwargs['page-index'] ?? 1),
-      });
-      return list.map((e) => ({
-        id: e.id ?? e.entryId ?? '',
-        source: e.termName ?? e.source ?? '',
-        target: e.termTranslation ?? e.target ?? '',
-      })).concat([{ note: `total=${total}` }].slice(0, total > 0 ? 0 : 1));
+      const sourceText = String(kwargs['source-text'] ?? '');
+      const pageNum = Number(kwargs['page-num'] ?? 1);
+      const pageSize = Number(kwargs['page-size'] ?? 100);
+      if (sourceText) {
+        const { list, total } = await listEntries(session, { pageSize, pageNum, sourceText });
+        const strip = (t) => String(t ?? '').replace(/<[^>]+>/g, '');
+        return {
+          total,
+          entries: list.map((e) => ({
+            id: e.id ?? e.entryId ?? '',
+            source: strip(e.termName ?? e.source ?? ''),
+            target: strip(e.termTranslation ?? e.target ?? ''),
+          })),
+        };
+      }
+      // No search text: probe the library with one common character per page
+      // until we have every distinct entry (the endpoint requires sourceText).
+      const seen = new Map();
+      const probes = ['药', '医', '监', '管', '产', '品', '注', '册', '临', '床', '械', '审', '批', '安', '有', '效'];
+      for (const ch of probes) {
+        const { list } = await listEntries(session, { pageSize: 500, pageNum: 1, sourceText: ch });
+        for (const e of list) {
+          const id = e.id ?? e.entryId ?? `${e.source ?? e.termName}/${e.target ?? e.termTranslation}`;
+          if (!seen.has(id)) seen.set(id, { id, source: String(e.termName ?? e.source ?? '').replace(/<[^>]+>/g, ''), target: String(e.termTranslation ?? e.target ?? '').replace(/<[^>]+>/g, '') });
+        }
+        if (seen.size >= 500) break; // library cap safety
+      }
+      return { total: seen.size, entries: [...seen.values()] };
     }
 
     if (kwargs.action === 'add') {
@@ -213,8 +301,18 @@ export const command = cli({
       })).filter((t) => t.termName && t.termTranslation);
       if (terms.length === 0) throw new ArgumentError('No usable {source,target} entries in the file');
       if (kwargs['dry-run'] === true) return { action: 'add', dry_run: true, would_add: terms.length, terms: terms.slice(0, 30) };
-      const res = await createEntries(session, terms);
-      return { action: 'add', ...res };
+      // The editor's payload requires groupId + libraryId (from taskDetail) —
+      // resolve them once; entries go in one call per pair using the flat shape.
+      const libraryId = await resolveTermLibraryId(session);
+      const res = await createEntries(session, terms, {
+        groupId: detail.groupId,
+        libraryId,
+        libType: 1,
+        docId,
+        comment: String(kwargs.comment ?? ''),
+        isAudit: 0,
+      });
+      return { action: 'add', library: libraryId, libraryName: detail.termLibrary?.[0]?.libraryName ?? '', created: res.created, entries: res.entries };
     }
 
     // extract & check both need the document
@@ -244,8 +342,12 @@ export const command = cli({
     }
 
     if (kwargs.action === 'check') {
-      const { list } = await listEntries(session, { pageSize: 500, pageIndex: 1 });
-      const terms = list.map((e) => ({ source: e.termName, target: e.termTranslation })).filter((t) => t.source && t.target);
+      const list = await listAllEntries(session);
+      // API 返回字段是 source/target（可能带搜索高亮 <span>），剥掉后再用
+      const strip = (t) => String(t ?? '').replace(/<[^>]+>/g, '');
+      const terms = list
+        .map((e) => ({ source: strip(e.source ?? e.termName), target: strip(e.target ?? e.termTranslation) }))
+        .filter((t) => t.source && t.target);
       const issues = checkConsistency(segments, terms);
       if (kwargs.out) {
         const fs = await import('node:fs');
