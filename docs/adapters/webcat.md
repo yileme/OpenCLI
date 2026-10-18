@@ -69,10 +69,15 @@ WebCAT logs you out; rerun `login`, or `open` with `--cookie "ck=...; CASID=..."
 
 ```sh
 webcat terms extract --min-count 3 --max 50   # frequency candidates + repeat inconsistencies
-webcat terms list                             # termbase entries
+webcat terms list                             # termbase entries (probes common chars; the API needs sourceText)
+webcat terms list --source-text 医疗器械        # search the termbase directly
 webcat terms add --file terms.json            # [{source,target},…] → termbase (--dry-run to preview)
 webcat terms check                            # segments violating an approved rendering
 ```
+
+Notes: `entry/create` must be form-encoded (JSON bodies arrive as null) and
+duplicates (errorCode 420014) are skipped and reported. Sources returned by
+the search endpoint carry highlight `<span>` tags — they are stripped.
 
 `extract` deliberately does **not** guess translations: it ranks CJK n-gram
 candidates (stop-char edges removed) and separately reports
