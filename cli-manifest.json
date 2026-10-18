@@ -39110,12 +39110,34 @@
         "default": false,
         "required": false,
         "help": "Validate the payload and stop before writing"
+      },
+      {
+        "name": "force",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Rewrite segments even when the target already matches (default: skip, making fill idempotent)"
+      },
+      {
+        "name": "backup",
+        "type": "bool",
+        "default": true,
+        "required": false,
+        "help": "Snapshot current targets to ~/.opencli/webcat-backups/ before writing"
+      },
+      {
+        "name": "no-backup",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Skip the pre-write backup snapshot"
       }
     ],
     "columns": [
       "docId",
       "requested",
       "updated",
+      "skipped_identical",
       "skipped_locked",
       "verified",
       "mismatch_count"
@@ -39277,6 +39299,107 @@
   },
   {
     "site": "webcat",
+    "name": "qa",
+    "description": "Run WebCAT QA on the open task, then classify false positives (only real issues survive)",
+    "access": "read",
+    "domain": "webcat-dl.iol8.com",
+    "strategy": "local",
+    "browser": false,
+    "args": [
+      {
+        "name": "run",
+        "type": "bool",
+        "default": true,
+        "required": false,
+        "help": "Trigger a fresh QA pass before reading logs"
+      },
+      {
+        "name": "no-run",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Skip the QA run; classify existing logs only"
+      },
+      {
+        "name": "min-verdict",
+        "type": "str",
+        "default": "review",
+        "required": false,
+        "help": "Only report entries at/above this severity",
+        "choices": [
+          "review",
+          "real"
+        ]
+      },
+      {
+        "name": "out",
+        "type": "str",
+        "required": false,
+        "help": "Write the classified log (JSONL) to this file"
+      },
+      {
+        "name": "max",
+        "type": "int",
+        "default": 500,
+        "required": false,
+        "help": "Cap reported entries"
+      }
+    ],
+    "columns": [
+      "index",
+      "checkType",
+      "verdict",
+      "description",
+      "source",
+      "target"
+    ],
+    "type": "js",
+    "modulePath": "webcat/qa.js",
+    "sourceFile": "webcat/qa.js"
+  },
+  {
+    "site": "webcat",
+    "name": "restore",
+    "description": "Restore WebCAT targets from a fill backup snapshot",
+    "access": "write",
+    "domain": "webcat-dl.iol8.com",
+    "strategy": "local",
+    "browser": false,
+    "args": [
+      {
+        "name": "file",
+        "type": "str",
+        "required": false,
+        "positional": true,
+        "help": "Backup file (from `fill` output); defaults to the newest snapshot for the open doc"
+      },
+      {
+        "name": "dry-run",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Show what would be restored without writing"
+      },
+      {
+        "name": "chunk",
+        "type": "int",
+        "default": 40,
+        "required": false,
+        "help": "Segments per batch-save-target request"
+      }
+    ],
+    "columns": [
+      "docId",
+      "segments_in_backup",
+      "restored",
+      "backup_file"
+    ],
+    "type": "js",
+    "modulePath": "webcat/restore.js",
+    "sourceFile": "webcat/restore.js"
+  },
+  {
+    "site": "webcat",
     "name": "sentences",
     "description": "Read WebCAT segments (source, target, status, inline tags) for the open document",
     "access": "read",
@@ -39402,6 +39525,85 @@
     "type": "js",
     "modulePath": "webcat/submit.js",
     "sourceFile": "webcat/submit.js"
+  },
+  {
+    "site": "webcat",
+    "name": "terms",
+    "description": "Terminology tools for the open WebCAT task: extract candidates, add to termbase, check consistency",
+    "access": "read",
+    "domain": "webcat-dl.iol8.com",
+    "strategy": "local",
+    "browser": false,
+    "args": [
+      {
+        "name": "action",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "extract | add | list | check",
+        "choices": [
+          "extract",
+          "add",
+          "list",
+          "check"
+        ]
+      },
+      {
+        "name": "min-count",
+        "type": "int",
+        "default": 2,
+        "required": false,
+        "help": "extract: minimum occurrences of a candidate"
+      },
+      {
+        "name": "max",
+        "type": "int",
+        "default": 200,
+        "required": false,
+        "help": "extract: cap number of candidates returned"
+      },
+      {
+        "name": "file",
+        "type": "str",
+        "required": false,
+        "help": "add: JSON file with [{source,target}] terms to push"
+      },
+      {
+        "name": "page-size",
+        "type": "int",
+        "default": 100,
+        "required": false,
+        "help": "list: entries per page"
+      },
+      {
+        "name": "page-index",
+        "type": "int",
+        "default": 1,
+        "required": false,
+        "help": "list: 1-based page"
+      },
+      {
+        "name": "dry-run",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "add: validate without writing"
+      },
+      {
+        "name": "out",
+        "type": "str",
+        "required": false,
+        "help": "extract/check: also write JSONL to this file"
+      }
+    ],
+    "columns": [
+      "source",
+      "target",
+      "count"
+    ],
+    "type": "js",
+    "modulePath": "webcat/terms.js",
+    "sourceFile": "webcat/terms.js"
   },
   {
     "site": "wechat-channels",

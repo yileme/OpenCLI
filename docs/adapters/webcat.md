@@ -48,6 +48,52 @@ WebCAT logs you out; rerun `login`, or `open` with `--cookie "ck=...; CASID=..."
 | `webcat confirm` | write | Confirm / un-confirm segments |
 | `webcat submit` | write | Finish the task (needs `--yes`) |
 | `webcat import` | write | Backfill from a Wordfast TXLF export (aligned, tags auto-injected) |
+| `webcat restore` | write | Roll targets back from a fill backup snapshot |
+| `webcat terms` | read/write | Terminology: extract candidates / add to termbase / list / consistency check |
+| `webcat qa` | read | Run QA and classify false positives (real issues only) |
+
+## Safe writes: idempotent fill, backups, resume
+
+- `fill` is **diff-only by default**: segments whose current target already
+  matches are skipped (`skipped_identical`), so re-running the same command is
+  safe and doubles as the resume mechanism after a failure. Use `--force` to
+  rewrite everything.
+- Before writing, `fill` snapshots current targets to
+  `~/.opencli/webcat-backups/<docId>-<timestamp>.json` (disable with
+  `--no-backup`). Roll back with `webcat restore` (newest snapshot by default,
+  or pass a file; `--dry-run` previews).
+- Failed chunks are retried with backoff (auth errors fail fast); if chunks
+  still fail, the error tells you to re-run the same command to resume.
+
+## Terminology
+
+```sh
+webcat terms extract --min-count 3 --max 50   # frequency candidates + repeat inconsistencies
+webcat terms list                             # termbase entries
+webcat terms add --file terms.json            # [{source,target},…] → termbase (--dry-run to preview)
+webcat terms check                            # segments violating an approved rendering
+```
+
+`extract` deliberately does **not** guess translations: it ranks CJK n-gram
+candidates (stop-char edges removed) and separately reports
+`repeat_inconsistencies` — identical source segments translated differently,
+which are genuine consistency defects with segment ids attached.
+
+## QA with false-positive filtering
+
+```sh
+webcat qa                  # run QA, classify, report only review/real entries
+webcat qa --no-run         # classify the existing QA logs without re-running
+webcat qa --min-verdict real   # only hard errors
+```
+
+Every QA log gets a verdict: `false_positive` (benign by rule), `review`
+(needs human eyes), `real` (hard defect). Rules cover NUMBER (reformatted
+dates, 万/亿 scale conversion, entity-digit artifacts), PUNCT/SPACE
+(target-language convention), TAG/FORMAT (entity spelling), SPELL (proper
+nouns kept verbatim). Counts come back as `{real, review, false_positive}` —
+on the 740-segment pilot deck: 340 logs → 323 filtered, 17 worth reviewing,
+0 hard errors.
 
 ## Importing from Wordfast (TXLF backfill)
 

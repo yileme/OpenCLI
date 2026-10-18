@@ -10,7 +10,10 @@
  * after reading `opencli webcat sentences`.
  */
 
-import { ArgumentError, CommandExecutionError } from '@jackwener/opencli/errors';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { ArgumentError, AuthRequiredError, CommandExecutionError } from '@jackwener/opencli/errors';
 import { cli, Strategy } from '@jackwener/opencli/registry';
 import {
   WEBCAT_DOMAIN,
@@ -76,6 +79,7 @@ export async function fetchSegmentsByIds(session, docId, ids, fetchImpl = fetch)
 
 export async function pushTargets(session, docId, items, { chunkSize = 50, saveSnapshot = false, fetchImpl = fetch } = {}) {
   const results = [];
+  chunkSizeGuard(chunkSize);
   for (let index = 0; index < items.length; index += chunkSize) {
     const chunk = items.slice(index, index + chunkSize);
     const envelope = await webcatFetch('/sentence/webcatSentence/batch-save-target', {
@@ -89,6 +93,71 @@ export async function pushTargets(session, docId, items, { chunkSize = 50, saveS
     results.push({ chunk: chunk.length, envelope });
   }
   return results;
+}
+
+function chunkSizeGuard(chunkSize) {
+  if (!Number.isSafeInteger(chunkSize) || chunkSize < 1 || chunkSize > 500) {
+    throw new ArgumentError('--chunk must be between 1 and 500');
+  }
+  return chunkSize;
+}
+
+/**
+ * Chunk-level retry: a failed chunk is retried with backoff; chunks that keep
+ * failing are reported so the caller can re-run (fill is diff-only, so a
+ * re-run skips everything already written — that is the resume mechanism).
+ */
+export async function pushTargetsResilient(session, docId, items, { chunkSize = 50, saveSnapshot = false, retries = 2, fetchImpl = fetch } = {}) {
+  const failed = [];
+  chunkSizeGuard(chunkSize);
+  for (let index = 0; index < items.length; index += chunkSize) {
+    const chunk = items.slice(index, index + chunkSize);
+    let done = false;
+    let lastError = null;
+    for (let attempt = 0; attempt <= retries && !done; attempt++) {
+      try {
+        await webcatFetch('/sentence/webcatSentence/batch-save-target', {
+          session,
+          fetchImpl,
+          data: { data: JSON.stringify({ docId, data: chunk }), saveSnapshot },
+        });
+        done = true;
+      } catch (error) {
+        lastError = error;
+        if (error instanceof AuthRequiredError) throw error; // no point retrying auth
+        await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+      }
+    }
+    if (!done) failed.push({ from: index, count: chunk.length, error: String(lastError?.message ?? lastError) });
+  }
+  if (failed.length) {
+    throw new CommandExecutionError(
+      `${failed.length} chunk(s) failed after ${retries + 1} attempt(s); re-run the same command to resume (already-written segments are skipped).`,
+      failed.map((f) => f.error).slice(0, 3).join(' | '),
+    );
+  }
+  return { chunks: Math.ceil(items.length / chunkSize) };
+}
+
+export function getBackupDir() {
+  return process.env.WEBCAT_BACKUP_DIR || path.join(os.homedir(), '.opencli', 'webcat-backups');
+}
+
+/** Snapshot {sentId: {targetPlaceholder,targetText}} before a write. */
+export function writeBackup(docId, segmentMap) {
+  const dir = getBackupDir();
+  fs.mkdirSync(dir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const file = path.join(dir, `${String(docId).replace(/[^a-zA-Z0-9_-]/g, '_')}-${stamp}.json`);
+  const payload = {};
+  for (const [sentId, dto] of segmentMap.entries()) {
+    payload[sentId] = {
+      targetPlaceholder: dto?.targetPlaceholder ?? '',
+      targetText: dto?.targetText ?? '',
+    };
+  }
+  fs.writeFileSync(file, JSON.stringify({ docId, savedAt: new Date().toISOString(), segments: payload }, null, 1), 'utf-8');
+  return file;
 }
 
 export const command = cli({
@@ -108,8 +177,11 @@ export const command = cli({
     { name: 'snapshot', type: 'bool', default: false, help: 'Ask WebCAT to store a snapshot before writing' },
     { name: 'verify', type: 'bool', default: true, help: 'Re-read the written segments and report mismatches' },
     { name: 'dry-run', type: 'bool', default: false, help: 'Validate the payload and stop before writing' },
+    { name: 'force', type: 'bool', default: false, help: 'Rewrite segments even when the target already matches (default: skip, making fill idempotent)' },
+    { name: 'backup', type: 'bool', default: true, help: 'Snapshot current targets to ~/.opencli/webcat-backups/ before writing' },
+    { name: 'no-backup', type: 'bool', default: false, help: 'Skip the pre-write backup snapshot' },
   ],
-  columns: ['docId', 'requested', 'updated', 'skipped_locked', 'verified', 'mismatch_count'],
+  columns: ['docId', 'requested', 'updated', 'skipped_identical', 'skipped_locked', 'verified', 'mismatch_count'],
   func: async (kwargs) => {
     const session = loadSession();
     const detail = await getTaskDetail(session);
@@ -149,6 +221,7 @@ export const command = cli({
 
     const items = [];
     const skippedLocked = [];
+    const skippedIdentical = [];
     for (const entry of normalised) {
       const dto = segmentMap.get(entry.sentId);
       const segment = dto ? normalizeSegment(dto) : null;
@@ -156,7 +229,12 @@ export const command = cli({
         skippedLocked.push(entry.sentId);
         continue;
       }
-      items.push(buildTargetItem(entry, segment ?? { sentId: entry.sentId }));
+      const item = buildTargetItem(entry, segment ?? { sentId: entry.sentId });
+      if (kwargs.force !== true && segment && normalizeForCompare(item.targetText) === normalizeForCompare(segment.target)) {
+        skippedIdentical.push(entry.sentId);
+        continue;
+      }
+      items.push(item);
     }
 
     const expected = new Map(items.map((item) => [item.sentId, normalizeForCompare(item.targetText)]));
@@ -168,13 +246,19 @@ export const command = cli({
         requested: normalised.length,
         updated: 0,
         missing_sent_ids: missing,
+        skipped_identical: skippedIdentical,
         skipped_locked: skippedLocked,
         preview: items.slice(0, 20),
       };
     }
 
+    let backupFile = null;
+    if (items.length > 0 && kwargs.backup === true && kwargs['no-backup'] !== true) {
+      backupFile = writeBackup(docId, segmentMap);
+    }
+
     if (items.length > 0) {
-      await pushTargets(session, docId, items, { chunkSize, saveSnapshot: kwargs.snapshot === true });
+      await pushTargetsResilient(session, docId, items, { chunkSize, saveSnapshot: kwargs.snapshot === true });
     }
 
     let verify = null;
@@ -200,7 +284,9 @@ export const command = cli({
       requested: normalised.length,
       updated: items.length,
       missing_sent_ids: missing,
+      skipped_identical: skippedIdentical,
       skipped_locked: skippedLocked,
+      backup_file: backupFile,
       verified: verify ? verify.verified : null,
       mismatch_count: verify ? verify.mismatches.length : null,
       mismatches: verify ? verify.mismatches.slice(0, 50) : [],
@@ -208,4 +294,4 @@ export const command = cli({
   },
 });
 
-export const __test__ = { command, fetchSegmentsByIds, normalizeForCompare, pushTargets };
+export const __test__ = { command, fetchSegmentsByIds, normalizeForCompare, pushTargets, pushTargetsResilient, writeBackup, getBackupDir };
