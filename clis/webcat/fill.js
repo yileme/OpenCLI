@@ -148,7 +148,7 @@ export async function pushTargetsResilient(session, docId, items, { chunkSize = 
       // times, spaced out, then report only the items that truly failed.
       for (const item of chunk) {
         let itemDone = false;
-        for (let attempt = 0; attempt < 3 && !itemDone; attempt++) {
+        for (let attempt = 0; attempt < 5 && !itemDone; attempt++) {
           try {
             await webcatFetch('/sentence/webcatSentence/batch-save-target', {
               session,
@@ -159,7 +159,7 @@ export async function pushTargetsResilient(session, docId, items, { chunkSize = 
           } catch (error) {
             if (error instanceof AuthRequiredError) throw error;
             lastError = error;
-            await wait(3000 * (attempt + 1));
+            await wait(4000 * (attempt + 1));
           }
         }
         if (!itemDone && await chunkAlreadyWritten(session, [item], { fetchImpl })) itemDone = true;
