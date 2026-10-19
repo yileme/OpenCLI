@@ -188,6 +188,30 @@ describe('fill backup + restore', () => {
     expect(waits[0]).toBeGreaterThanOrEqual(2500); // permission-style errors back off harder
   });
 
+  it('falls back to one segment per request when a chunk keeps failing', async () => {
+    // Observed live: the chunk request keeps answering 900000 while a
+    // single-segment request for the same content succeeds.
+    const items = [{ sentId: 's1', targetPlaceholder: 'a' }, { sentId: 's2', targetPlaceholder: 'b' }];
+    const session = { ck: 'x', splitIndex: '0', cookies: [{ name: 'a', value: 'b', domain: '.iol8.com', path: '/' }] };
+    const seen = [];
+    const fetchImpl = async (url, init) => {
+      const body = decodeURIComponent(String(init?.body ?? ''));
+      const ids = [...body.matchAll(/"sentId":"([^"]+)"/g)].map((m) => m[1]);
+      const single = ids.length === 1;
+      seen.push(single ? 'single' : 'chunk');
+      if (!single) {
+        return { ok: true, status: 200, text: async () => JSON.stringify({ result: '0', errorCode: '900000', errorMsg: '权限不足或句子不符合条件', success: false }) };
+      }
+      return { ok: true, status: 200, text: async () => JSON.stringify({ result: '1', data: null, success: true }) };
+    };
+    const res = await fillTest.pushTargetsResilient(session, 1, items, {
+      chunkSize: 2, retries: 0, fetchImpl, waitImpl: async () => {},
+    });
+    expect(res.chunks).toBe(1);
+    expect(seen.filter((x) => x === 'chunk').length).toBeGreaterThanOrEqual(1);
+    expect(seen.filter((x) => x === 'single').length).toBe(2); // one per segment
+  });
+
   it('does not report a chunk as failed when the write actually landed (read-back confirmation)', async () => {
     const items = [{ sentId: 's1', targetPlaceholder: '新译文', targetText: '新译文' }];
     const session = { ck: 'x', splitIndex: '0', cookies: [{ name: 'a', value: 'b', domain: '.iol8.com', path: '/' }] };

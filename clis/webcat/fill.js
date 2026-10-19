@@ -141,7 +141,33 @@ export async function pushTargetsResilient(session, docId, items, { chunkSize = 
       }
     }
     if (!done && await chunkAlreadyWritten(session, chunk, { fetchImpl })) done = true; // silent success
-    if (!done) failed.push({ from: index, count: chunk.length, error: String(lastError?.message ?? lastError) });
+    if (!done) {
+      // Last resort, verified against the live endpoint: one segment per request
+      // (no `saveSnapshot` field, explicit splitIndex) goes through while the
+      // same content in a chunk keeps answering 900000. Retry each item a few
+      // times, spaced out, then report only the items that truly failed.
+      for (const item of chunk) {
+        let itemDone = false;
+        for (let attempt = 0; attempt < 3 && !itemDone; attempt++) {
+          try {
+            await webcatFetch('/sentence/webcatSentence/batch-save-target', {
+              session,
+              fetchImpl,
+              data: { data: JSON.stringify({ docId, splitIndex: session.splitIndex || '0', data: [item] }) },
+            });
+            itemDone = true;
+          } catch (error) {
+            if (error instanceof AuthRequiredError) throw error;
+            lastError = error;
+            await wait(3000 * (attempt + 1));
+          }
+        }
+        if (!itemDone && await chunkAlreadyWritten(session, [item], { fetchImpl })) itemDone = true;
+        if (!itemDone) {
+          failed.push({ from: index, count: 1, sentId: item.sentId, error: String(lastError?.message ?? lastError) });
+        }
+      }
+    }
   }
   if (failed.length) {
     throw new CommandExecutionError(
