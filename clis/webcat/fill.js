@@ -107,8 +107,19 @@ function chunkSizeGuard(chunkSize) {
  * failing are reported so the caller can re-run (fill is diff-only, so a
  * re-run skips everything already written — that is the resume mechanism).
  */
-export async function pushTargetsResilient(session, docId, items, { chunkSize = 50, saveSnapshot = false, retries = 2, fetchImpl = fetch } = {}) {
+/**
+ * This endpoint intermittently answers `900000 权限不足或句子不符合条件` even
+ * though an identical request succeeds moments later (verified: the same payload
+ * returns 200 on retry, and when it does not the write did not land). Treat it
+ * as back-off-and-retry, and after the last attempt read the chunk back before
+ * declaring failure — a "failed" chunk that actually reached the server must not
+ * be reported as lost.
+ */
+const RETRYABLE_WRITE = /900000|权限不足或句子不符合条件/;
+
+export async function pushTargetsResilient(session, docId, items, { chunkSize = 50, saveSnapshot = false, retries = 3, fetchImpl = fetch, waitImpl } = {}) {
   const failed = [];
+  const wait = (ms) => (waitImpl ? waitImpl(ms) : new Promise((r) => setTimeout(r, ms)));
   chunkSizeGuard(chunkSize);
   for (let index = 0; index < items.length; index += chunkSize) {
     const chunk = items.slice(index, index + chunkSize);
@@ -125,9 +136,11 @@ export async function pushTargetsResilient(session, docId, items, { chunkSize = 
       } catch (error) {
         lastError = error;
         if (error instanceof AuthRequiredError) throw error; // no point retrying auth
-        await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+        const slow = RETRYABLE_WRITE.test(String(error?.message ?? error));
+        await wait((slow ? 2500 : 800) * (attempt + 1));
       }
     }
+    if (!done && await chunkAlreadyWritten(session, chunk, { fetchImpl })) done = true; // silent success
     if (!done) failed.push({ from: index, count: chunk.length, error: String(lastError?.message ?? lastError) });
   }
   if (failed.length) {
@@ -137,6 +150,34 @@ export async function pushTargetsResilient(session, docId, items, { chunkSize = 
     );
   }
   return { chunks: Math.ceil(items.length / chunkSize) };
+}
+
+/**
+ * Best-effort check that a "failed" chunk is in fact already stored, by
+ * re-reading the editor's placeholder for those segments.
+ */
+async function chunkAlreadyWritten(session, chunk, { fetchImpl = fetch } = {}) {
+  if (typeof globalThis.fetch !== 'function' && !fetchImpl) return false;
+  try {
+    const ids = chunk.map((c) => c.sentId).filter(Boolean);
+    if (!ids.length) return false;
+    if (!session?.ck) return false;
+    const page = await flowGetSentence(session, {
+      docId: session.docId,
+      sentIds: ids.join(','),
+      pageSize: ids.length,
+      splitIndex: session.splitIndex || '0',
+    }, fetchImpl);
+    const seen = new Map(page.list.map((d) => [String(d?.sentId), d]));
+    return chunk.every((c) => {
+      const got = seen.get(String(c.sentId));
+      if (!got) return false;
+      return String(got.targetPlaceholder ?? '') === String(c.targetPlaceholder ?? '')
+        || String(got.targetText ?? '') === String(c.targetText ?? '');
+    });
+  } catch {
+    return false;
+  }
 }
 
 export function getBackupDir() {

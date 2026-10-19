@@ -161,4 +161,56 @@ describe('fill backup + restore', () => {
       .rejects.toBeInstanceOf(AuthRequiredError);
     expect(authCalls).toBe(1); // no retry on auth
   });
+
+  it('retries the intermittent 900000 write error instead of losing the chunk', async () => {
+    // Observed live: batch-save-target answers `900000 权限不足或句子不符合条件`
+    // even though the same payload succeeds on a later attempt.
+    let calls = 0;
+    const flaky = async () => {
+      calls += 1;
+      if (calls < 4) {
+        return {
+          ok: true, status: 200,
+          text: async () => JSON.stringify({ result: '0', errorCode: '900000', errorMsg: '权限不足或句子不符合条件', success: false }),
+        };
+      }
+      return { ok: true, status: 200, text: async () => JSON.stringify({ result: '1', data: null, success: true }) };
+    };
+    const items = [{ sentId: 's1', targetPlaceholder: 't1' }];
+    const session = { ck: 'x', splitIndex: '0', cookies: [{ name: 'a', value: 'b', domain: '.iol8.com', path: '/' }] };
+    const waits = [];
+    const res = await fillTest.pushTargetsResilient(session, 1, items, {
+      chunkSize: 1, retries: 3, fetchImpl: flaky, waitImpl: async (ms) => { waits.push(ms); },
+    });
+    expect(res.chunks).toBe(1);
+    expect(calls).toBe(4); // three 900000 answers, then success
+    expect(waits.length).toBe(3);
+    expect(waits[0]).toBeGreaterThanOrEqual(2500); // permission-style errors back off harder
+  });
+
+  it('does not report a chunk as failed when the write actually landed (read-back confirmation)', async () => {
+    const items = [{ sentId: 's1', targetPlaceholder: '新译文', targetText: '新译文' }];
+    const session = { ck: 'x', splitIndex: '0', cookies: [{ name: 'a', value: 'b', domain: '.iol8.com', path: '/' }] };
+    process.env.WEBCAT_SESSION_FILE = '/tmp/does-not-exist-webcat.json';
+    try {
+      const fetchImpl = async (url) => {
+        if (String(url).includes('flowGetSentence')) {
+          return {
+            ok: true, status: 200,
+            text: async () => JSON.stringify({ result: '1', data: { data: [{ sentId: 's1', targetPlaceholder: '新译文', targetText: '新译文' }] }, success: true }),
+          };
+        }
+        return {
+          ok: true, status: 200,
+          text: async () => JSON.stringify({ result: '0', errorCode: '900000', errorMsg: '权限不足或句子不符合条件', success: false }),
+        };
+      };
+      const res = await fillTest.pushTargetsResilient(session, 1, items, {
+        chunkSize: 1, retries: 1, fetchImpl, waitImpl: async () => {},
+      });
+      expect(res.chunks).toBe(1); // no throw: re-read proved the write landed
+    } finally {
+      delete process.env.WEBCAT_SESSION_FILE;
+    }
+  });
 });
